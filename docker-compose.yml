@@ -1,0 +1,40 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Your_strong_password123"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "pidof sqlservr || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  api:
+    build:
+      context: ./src/ApartmentRental.Api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=ApartmentRental;User Id=sa;Password=Your_strong_password123;TrustServerCertificate=True;"
+      Jwt__Key: "replace-this-with-a-long-random-production-secret"
+      Cors__Origins__0: "http://localhost:5173"
+    ports:
+      - "5000:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
+  client:
+    build:
+      context: ./client
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+volumes:
+  sqlserver-data:
