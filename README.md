@@ -1,131 +1,90 @@
-# Apartment Rental System
+# Apartment Rental System v2
 
-[![MySQL 8.0+](https://img.shields.io/badge/MySQL-8.0%2B-4479A1?logo=mysql&logoColor=white)](https://www.mysql.com/)
-[![Database design](https://img.shields.io/badge/focus-normalized%20relational%20design-2ea44f)](sql/001_schema.sql)
+Apartment Rental System v2 is a rebuilt full-stack rental operations platform for property teams and residents. The original repository contained a MySQL schema and reporting queries; this version preserves that business model while adding a production-oriented application layer with **ASP.NET Core**, **React/TypeScript**, **SQL Server**, **JWT RBAC**, property search, lease management, rent collection, maintenance workflows, xUnit coverage, Playwright coverage, and container deployment.
 
-**Apartment Rental System** is a MySQL database project for managing residential properties, units, tenants, lease agreements, rent payments, and maintenance work. It converts a previously empty repository into a runnable relational-database portfolio project with an explicit data model and operational reporting queries.
+## Architecture
 
-> **Design goal.** The schema is written as a small, realistic foundation for a property-management application. It prioritizes data integrity, queryability, and clear ownership relationships over unnecessary complexity.
+| Layer | Technology | Responsibility |
+|---|---|---|
+| Client | React, TypeScript, Vite, CSS | Public property discovery and authenticated rental workspace |
+| API | ASP.NET Core 8 minimal APIs | Authentication, authorization, search, leases, payments, maintenance, audit events |
+| Persistence | EF Core 8, SQL Server 2022 | Relational model, constraints, indexes, transactional payment updates |
+| Unit tests | xUnit, EF Core InMemory | Search filters, derived availability, maintenance review rules |
+| Browser tests | Playwright | Public search, sign-in, and protected workspace smoke flows |
+| Deployment | Docker Compose, Nginx | SQL Server + API + static SPA with `/api` reverse proxy |
 
-## What it demonstrates
+## Functional scope
 
-| Area | Evidence in the repository |
-| --- | --- |
-| Relational modeling | Normalized entities for properties, units, tenants, leases, payments, and maintenance requests. |
-| Data integrity | Primary keys, foreign keys, unique constraints, check constraints, and indexed access paths. |
-| Operational reporting | Queries for availability, active tenancy, receivables, collections, lease expirations, and maintenance work. |
-| Derived data | A view derives unit availability from active leases and open maintenance tickets instead of persisting a drift-prone status field. |
-| Reproducibility | Separate schema, fictional sample data, and reporting-query scripts. |
+The public experience supports city, bedroom, budget, and keyword search. Availability is derived rather than manually duplicated: an active lease produces `occupied`, an open or in-progress maintenance request produces `maintenance_review`, a listed unit produces `available`, and an unlisted unit produces `off_market`.
 
-## Data model
+Authenticated users have one of three roles. **Admins** can inspect audit events and perform all operational actions. **Agents** can manage leases, payments, and maintenance. **Tenants** can see only their own leases and payments, submit maintenance requests, and record payments against their own lease. Every state-changing workflow appends an audit event.
 
-```mermaid
-erDiagram
-    PROPERTIES ||--o{ UNITS : contains
-    UNITS ||--o{ LEASES : has
-    TENANTS ||--o{ LEASES : signs
-    LEASES ||--o{ PAYMENTS : schedules
-    UNITS ||--o{ MAINTENANCE_REQUESTS : receives
-    TENANTS o|--o{ MAINTENANCE_REQUESTS : reports
+The rent workflow is period-based and prevents overpayment. Payment rows preserve amount due, amount paid, due date, payment method, reference code, and paid timestamp. Lease creation validates date ranges, positive rent, non-negative deposits, and overlapping active or draft leases. Maintenance tickets support priority, status, resolution timestamps, and tenant scoping.
 
-    PROPERTIES {
-      bigint property_id PK
-      varchar property_name
-      varchar street_address
-      varchar city
-    }
-    UNITS {
-      bigint unit_id PK
-      bigint property_id FK
-      varchar unit_number
-      decimal listed_monthly_rent
-      boolean is_listed
-    }
-    TENANTS {
-      bigint tenant_id PK
-      varchar email UK
-      varchar phone
-    }
-    LEASES {
-      bigint lease_id PK
-      bigint unit_id FK
-      bigint tenant_id FK
-      date lease_start
-      date lease_end
-      enum status
-    }
-    PAYMENTS {
-      bigint payment_id PK
-      bigint lease_id FK
-      date payment_period
-      decimal amount_due
-      decimal amount_paid
-    }
-    MAINTENANCE_REQUESTS {
-      bigint request_id PK
-      bigint unit_id FK
-      bigint reported_by_tenant_id FK
-      enum priority
-      enum status
-    }
-```
+## Demo users
 
-## Repository structure
+| Role | Email | Password |
+|---|---|---|
+| Admin | `admin@apartment.local` | `Admin123!` |
+| Agent | `agent@apartment.local` | `Agent123!` |
+| Tenant | `amina.rahman@example.test` | `Tenant123!` |
 
-```text
-sql/
-├── 001_schema.sql            # Database, tables, constraints, indexes, and availability view
-├── 002_sample_data.sql       # Clearly fictional local-development data
-└── 003_reporting_queries.sql # Six practical management and reporting queries
-```
+Change all demo credentials and the JWT key before any non-development deployment.
 
-## Run locally
+## Run locally with Docker
 
-Install MySQL 8.0 or later, clone this repository, then execute the scripts in order. The schema file is safe to re-run during local development because it does not drop tables or data.
+Docker Compose starts SQL Server 2022, the ASP.NET Core API, and the React/Nginx client.
 
 ```bash
-mysql -u root -p < sql/001_schema.sql
-mysql -u root -p < sql/002_sample_data.sql
-mysql -u root -p < sql/003_reporting_queries.sql
+docker compose up --build
 ```
 
-The final command returns results for each documented query. The sample data uses `.example.test` addresses and clearly fictional property descriptions; it exists only to make the reporting queries reproducible.
+Then open [http://localhost:5173](http://localhost:5173). The API is available at [http://localhost:5000](http://localhost:5000), health checks are at `/api/health`, and OpenAPI is available at `/swagger`.
 
-## Key design decisions
+The API calls `EnsureCreated` on startup to make a clean local database usable immediately. For production, replace this with reviewed EF Core migrations and a controlled migration step.
 
-### Availability is derived, not duplicated
+## Run without Docker
 
-`vw_unit_availability` determines whether a unit is **occupied**, **available**, **under maintenance review**, or **off market** by examining active leases, open maintenance tickets, and the listing flag. This avoids maintaining a separate availability column that could become inconsistent when a lease changes.
+Install .NET 8 SDK, Node.js 22+, and SQL Server. Set the connection string in `src/ApartmentRental.Api/appsettings.json` or through `ConnectionStrings__DefaultConnection`, then run:
 
-### Lease terms preserve historical accuracy
+```bash
+dotnet run --project src/ApartmentRental.Api --urls http://localhost:5000
+cd client
+npm install
+npm run dev
+```
 
-The monthly rent is stored on both the unit listing and the lease. A unit's listed rent can change for future tenants without rewriting the agreed rent of a historic or active lease.
+## Tests
 
-### Payments are period-based
+Run API unit tests:
 
-`payments` has a unique `(lease_id, payment_period)` constraint. This makes rent collection and outstanding-balance queries predictable while still allowing partial payment through separate `amount_due` and `amount_paid` fields.
+```bash
+dotnet test tests/ApartmentRental.Api.Tests
+```
 
-### Constraints reflect business rules
+Run the frontend build:
 
-The schema rejects invalid dates, non-positive rent, negative payment amounts, duplicate unit numbers within a property, duplicate tenant emails, and resolved maintenance tickets without a resolution timestamp.
+```bash
+cd client
+npm install
+npm run build
+```
 
-## Example reports
+Run Playwright after starting the API and client:
 
-The reporting script includes the following portfolio-ready queries:
+```bash
+cd tests/ApartmentRental.E2E
+npm install
+npx playwright install chromium
+npm test
+```
 
-| Query | Business question answered |
-| --- | --- |
-| Available units | Which listed units can be marketed now? |
-| Active tenancy register | Who occupies each active unit and when does the lease end? |
-| Receivables | Which rent periods are unpaid or partially paid, and by how much? |
-| Monthly collections | How much was billed, collected, and remains outstanding by property and month? |
-| Expiring leases | Which tenants require renewal outreach within the next 60 days? |
-| Maintenance queue | Which open tickets should be prioritized? |
+## Deployment
 
-## Extension ideas
+The included `docker-compose.yml` is suitable for a single-host deployment after replacing demo secrets, adding a durable SQL Server backup strategy, placing TLS in front of Nginx, and configuring a real domain. The API container listens on port `8080`; the client container listens on port `80` and proxies `/api` requests to the API service.
 
-The current database focuses on core property operations. Logical next steps would be role-based users, payment transaction history, lease-document storage, tenant communications, scheduled rent reminders, or an API/dashboard built on top of this schema.
+For a managed cloud deployment, the same images can be published to a container registry and deployed as separate API and frontend services, while SQL Server should be replaced by a managed SQL Server instance with private networking, backups, monitoring, and secret storage. The repository also includes CI configuration that runs .NET tests, client builds, and Playwright installation checks on every push and pull request.
 
-## License
+## Repository history
 
-No license has been selected yet. Choose an explicit license before opening the project to outside contributions.
+The original SQL artifacts remain under `sql/` as historical reference and as documentation of the pre-rebuild data model. The rebuilt application lives under `src/`, `client/`, `tests/`, and deployment files at the repository root.
